@@ -17,7 +17,7 @@
     tasks: [], sessions: [], shifts: [], notes: [], clock: null, cycle: 0,
     settings: {
       name: '', focus: 25, short: 5, long: 15, dailyGoal: 120, weekStart: 1, rate: '', currency: '$',
-      tips: true, wall: 'black', dim: 0, blur: 0, accent: 'periwinkle', scene: true,
+      tips: true, wall: 'black', dim: 0, blur: 0, accent: 'periwinkle', scene: true, motion: true,
     },
     timer: { mode: 'focus', running: false, endAt: 0, left: 25 * 60, segStart: 0, taskId: '' },
   });
@@ -44,7 +44,7 @@
   try { customWall = localStorage.getItem(WALL_KEY) || ''; } catch { /* optional */ }
   if (S.settings.wall === 'custom' && !customWall) S.settings.wall = 'black';
 
-  const ui = { week: 0, planWeek: 0, pdfWeek: 0, statsWeek: 0, noteId: '', doneOpen: false, tipCat: 'all', tipShift: 0, pop: null, popTrigger: null, q: '' };
+  const ui = { week: 0, planWeek: 0, pdfWeek: 0, statsWeek: 0, noteId: '', doneOpen: false, tipCat: 'all', tipShift: 0, pop: null, popTrigger: null, q: '', flash: null, burst: false };
   let current = 'dashboard';
   let printing = false;
   let saveFailed = false;
@@ -234,6 +234,14 @@ ${back}${front}
     w.style.filter = Number(s.blur) > 0 ? `blur(${Number(s.blur)}px)` : '';
     w.style.setProperty('--dim', String(Math.max(0, Math.min(0.9, Number(s.dim) / 100 || 0))));
     document.body.classList.toggle('has-wall', s.wall !== 'black');
+    document.body.classList.toggle('no-motion', s.motion === false);
+    const key = `${s.wall}|${customWall ? customWall.length : 0}`;
+    if (w.dataset.k && w.dataset.k !== key && motionOn()) {
+      w.classList.remove('swap');
+      void w.offsetWidth;
+      w.classList.add('swap');
+    }
+    w.dataset.k = key;
   }
 
   function paintThumbs() {
@@ -312,7 +320,9 @@ ${back}${front}
     const t = String(title || '').trim();
     if (!t) return false;
     const e = Math.round(Number(est));
-    S.tasks.push({ id: uid(), title: t, subject: String(subject).trim(), due, est: e > 0 ? e : 0, done: false, doneAt: 0, created: Date.now() });
+    const id = uid();
+    S.tasks.push({ id, title: t, subject: String(subject).trim(), due, est: e > 0 ? e : 0, done: false, doneAt: 0, created: Date.now() });
+    ui.flash = { id, kind: 'new' };
     save();
     return true;
   }
@@ -446,6 +456,7 @@ ${back}${front}
     t.running = false;
     t.mode = next;
     t.left = dur(next);
+    ui.burst = true;
     save(); render(true); setTitle();
     toast(msg);
   }
@@ -497,7 +508,7 @@ ${back}${front}
     const open = openTasks();
     const label = t.running ? 'Pause' : left < total ? 'Resume' : 'Start';
     return `
-      <section class="card timer${big ? ' big' : ''}" aria-label="Pomodoro timer">
+      <section class="card timer${big ? ' big' : ''}${t.running ? ' running' : ''}" aria-label="Pomodoro timer">
         <header class="card-head">
           <h2>${ic('timer', 22)}Pomodoro timer</h2>
           <button type="button" class="icon-btn sm" data-act="go" data-id="settings" aria-label="Timer settings">${ic('sliders', 18)}</button>
@@ -671,7 +682,7 @@ ${back}${front}
         <span class="logo-tag">Plan • Focus • Achieve</span>
       </a>
       <nav class="nav" aria-label="Main">
-        ${NAV.map(([id, l, i]) => `<a class="nav-link" href="#${id}" data-view="${id}">${ic(i, 22)}<span>${l}</span></a>`).join('')}
+        ${NAV.map(([id, l, i], n) => `<a class="nav-link" href="#${id}" data-view="${id}" style="--n:${n}">${ic(i, 22)}<span>${l}</span></a>`).join('')}
       </nav>
       <figure class="quote">
         <svg class="quote-spark" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2 7 7 3-7 3-2 7-2-7-7-3 7-3z"/></svg>
@@ -742,13 +753,13 @@ ${back}${front}
       ${customWall ? '<p class="small muted">Your photo stays on this device. It is not included in backups.</p>' : ''}`;
   }
 
-  function renderPop() {
+  function renderPop(fresh) {
     const el = $('#pop');
     if (!ui.pop) { el.innerHTML = ''; return; }
     const isBell = ui.pop === 'bell';
     el.innerHTML = `
       <div class="pop-scrim" data-act="pop-close"></div>
-      <div class="pop pop-${ui.pop}" role="dialog" aria-label="${isBell ? 'Reminders' : 'Wallpaper'}" tabindex="-1">
+      <div class="pop pop-${ui.pop}${fresh && motionOn() ? ' fresh' : ''}" role="dialog" aria-label="${isBell ? 'Reminders' : 'Wallpaper'}" tabindex="-1">
         ${isBell ? bellPanel() : `<h2>Wallpaper</h2>${wallControls()}`}
         <button type="button" class="link pop-close" data-act="pop-close">Close</button>
       </div>`;
@@ -921,9 +932,9 @@ ${back}${front}
         </header>
         <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Focus time each day: ${days.map((d, i) => `${d.toLocaleDateString(undefined, { weekday: 'long' })} ${fmtDur(vals[i])}`).join(', ')}">
           <defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--acc)" stop-opacity=".28"/><stop offset="1" stop-color="var(--acc)" stop-opacity="0"/></linearGradient></defs>
-          <path d="${smoothPath(pts, floor)} L${pts[6][0].toFixed(1)},${floor} L${pts[0][0].toFixed(1)},${floor} Z" fill="url(#area)"/>
-          <path d="${smoothPath(pts, floor)}" class="line" fill="none"/>
-          ${pts.map((p, i) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${any && i === peak ? 6 : 3.5}" class="pt${any && i === peak ? ' peak' : ''}"><title>${esc(days[i].toLocaleDateString(undefined, { weekday: 'long' }))}: ${esc(fmtDur(vals[i]))}</title></circle>`).join('')}
+          <path class="area" d="${smoothPath(pts, floor)} L${pts[6][0].toFixed(1)},${floor} L${pts[0][0].toFixed(1)},${floor} Z" fill="url(#area)"/>
+          <path d="${smoothPath(pts, floor)}" class="line" fill="none" pathLength="1"/>
+          ${pts.map((p, i) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${any && i === peak ? 6 : 3.5}" class="pt${any && i === peak ? ' peak' : ''}" style="--p:${i}"><title>${esc(days[i].toLocaleDateString(undefined, { weekday: 'long' }))}: ${esc(fmtDur(vals[i]))}</title></circle>`).join('')}
           ${days.map((d, i) => `<text x="${((i + 0.5) * (W / 7)).toFixed(1)}" y="140" text-anchor="middle" class="axis">${esc(d.toLocaleDateString(undefined, { weekday: 'short' }))}</text>`).join('')}
         </svg>
         ${any ? `<p class="small muted">${esc(fmtDur(vals.reduce((a, b) => a + b, 0)))} focused ${ui.statsWeek ? 'last' : 'this'} week</p>` : '<p class="small muted">No focus time logged yet. Start a Pomodoro to see your week here.</p>'}
@@ -1264,6 +1275,7 @@ ${back}${front}
             <div class="field"><label for="s-name">Your name (shown on the dashboard and PDFs)</label>
               <input id="s-name" data-change="setting" name="name" value="${esc(s.name)}" autocomplete="name"></div>
             <label class="check-row"><input type="checkbox" data-change="setting" name="tips" ${s.tips !== false ? 'checked' : ''}> Show a study tip on the dashboard</label>
+            <label class="check-row"><input type="checkbox" data-change="setting" name="motion" ${s.motion !== false ? 'checked' : ''}> Animations</label>
           </div>
         </section>
         <section class="card">
@@ -1326,8 +1338,61 @@ ${back}${front}
       : `${LABELS[current]} - STUDORA`;
   }
 
+  /* ======================================================================
+     Motion. Page-enter effects play only when you change page (route), never on
+     small updates such as ticking a task, so nothing replays while you work.
+     ====================================================================== */
+
+  function motionOn() {
+    return S.settings.motion !== false &&
+      !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  const WRAPS = '.stats, .dash, .an-grid, .set-grid, .pomo, .pdf-grid, .board, .notes, .tip-list, .tips-page';
+
+  function countUp(el) {
+    const text = el.textContent;
+    const to = (text.match(/\d+/g) || []).map(Number);
+    if (!to.length) return;
+    const t0 = performance.now(), D = 800;
+    const step = now => {
+      const p = Math.min(1, (now - t0) / D), e = 1 - Math.pow(1 - p, 3);
+      if (p >= 1) { el.textContent = text; return; }
+      let i = 0;
+      el.textContent = text.replace(/\d+/g, () => String(Math.round(to[i++] * e)));
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  function playEnter() {
+    if (!motionOn()) return;
+    const blocks = [];
+    const walk = root => {
+      for (const c of root.children) { if (c.matches(WRAPS)) walk(c); else blocks.push(c); }
+    };
+    walk(view);
+    blocks.forEach((el, i) => { el.style.setProperty('--i', String(Math.min(i, 8))); el.classList.add('anim'); });
+    view.classList.add('enter');
+    view.querySelectorAll('.stat-value').forEach(countUp);
+  }
+
+  function playFlash() {
+    const f = ui.flash, burst = ui.burst;
+    ui.flash = null; ui.burst = false;
+    if (!motionOn()) return;
+    if (f) {
+      const input = view.querySelector(`.tick input[data-id="${f.id}"]`);
+      const row = input && input.closest('li');
+      if (row) row.classList.add(f.kind === 'new' ? 'fresh' : 'flash');
+      if (f.kind === 'done' && input) input.closest('.tick').classList.add('pop');
+    }
+    if (burst) view.querySelectorAll('.ring').forEach(r => r.classList.add('burst'));
+  }
+
   function render(keepScroll) {
     const y = window.scrollY;
+    view.classList.remove('enter');
     view.innerHTML = VIEWS[current]();
     document.querySelectorAll('.nav-link').forEach(a => {
       if (a.dataset.view === current) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
@@ -1336,6 +1401,7 @@ ${back}${front}
     paintThumbs();
     paintHero();
     setTitle();
+    playFlash();
     if (keepScroll) window.scrollTo(0, y);
   }
 
@@ -1356,6 +1422,7 @@ ${back}${front}
     current = VIEWS[name] ? name : 'dashboard';
     closeNav();
     render(false);
+    playEnter();
     window.scrollTo(0, 0);
     view.focus({ preventScroll: true });
   }
@@ -1497,7 +1564,7 @@ ${back}${front}
       if (ui.pop === id) { closePop(); return; }
       ui.pop = id;
       ui.popTrigger = b;
-      renderPop();
+      renderPop(true);
       const p = $('#pop .pop');
       if (p) p.focus();
     },
@@ -1675,6 +1742,7 @@ ${back}${front}
       t.done = el.checked;
       t.doneAt = el.checked ? Date.now() : 0;
       if (t.done && S.timer.taskId === t.id) S.timer.taskId = '';
+      ui.flash = t.done ? { id: t.id, kind: 'done' } : null;
       save(); render(true);
     } else if (kind === 'timer-task') {
       S.timer.taskId = el.value;
@@ -1702,6 +1770,7 @@ ${back}${front}
       else if (k === 'rate') { v = v === '' ? '' : Math.max(0, Number(v) || 0); el.value = v; }
       S.settings[k] = v;
       save();
+      if (k === 'motion') applyTheme();
       if (k === 'scene' || k === 'tips') { render(true); renderPop(); } else toast('Saved.');
     } else if (kind === 'restore') {
       const file = el.files && el.files[0];
